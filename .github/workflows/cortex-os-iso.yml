@@ -1,0 +1,103 @@
+name: Build CORTEX OS ISO
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cortex-os-plasma-iso
+    paths:
+      - 'cortex-os/**'
+      - 'fs/**'
+      - 'drivers/**'
+      - 'arch/x86/**'
+      - 'init/**'
+      - 'kernel/**'
+      - 'mm/**'
+      - 'net/**'
+      - 'block/**'
+      - 'include/**'
+      - 'Makefile'
+      - '.github/workflows/cortex-os-iso.yml'
+
+concurrency:
+  group: cortex-os-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  CORTEX_DIR: cortex-os
+
+jobs:
+  build-iso:
+    name: Build BIOS/UEFI ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free runner space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential busybox-static cpio debootstrap \
+            dwarves e2fsprogs flex grub-efi-amd64-bin grub-pc-bin \
+            libelf-dev libncurses-dev libssl-dev mtools qemu-system-x86 \
+            rsync xorriso
+
+      - name: Build CORTEX kernel
+        working-directory: cortex-os
+        run: make kernel
+
+      - name: Build Debian KDE root filesystem
+        working-directory: cortex-os
+        run: make rootfs
+
+      - name: Assemble disk image and initramfs
+        working-directory: cortex-os
+        run: |
+          scripts/build-initramfs.sh "$PWD/rootfs" "$PWD/build/kernel" "$PWD/artifacts"
+          df -h .
+
+      - name: Build BIOS/UEFI hybrid ISO
+        working-directory: cortex-os
+        run: scripts/build-iso.sh
+
+      - name: Generate checksum and build summary
+        working-directory: cortex-os
+        run: |
+          sha256sum artifacts/cortex-os.iso | tee artifacts/SHA256SUMS
+          ls -lh artifacts/cortex-os.iso artifacts/SHA256SUMS
+          {
+            echo '## CORTEX OS ISO'
+            echo
+            echo '- Boot modes: BIOS and UEFI'
+            echo '- Desktop: KDE Plasma Wayland'
+            echo '- Kernel: Frankenstein-Labs/linux'
+            echo
+            echo '```text'
+            cat artifacts/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-os-iso-${{ github.sha }}
+          path: |
+            cortex-os/artifacts/cortex-os.iso
+            cortex-os/artifacts/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
