@@ -1,0 +1,8 @@
+# Local build outputs
+build/
+rootfs/
+artifacts/
+src/
+*.iso
+*.ext4
+*.cpio.gz
